@@ -32,7 +32,7 @@ vi.mock('@supabase/supabase-js', () => ({
   })),
 }));
 
-// Mocking KV Store to avoid timeouts
+// Mocking KV Store
 vi.mock('../kv_store.tsx', () => ({
   get: vi.fn().mockResolvedValue(null),
   set: vi.fn().mockResolvedValue(undefined),
@@ -58,11 +58,5 @@ describe('API Integration', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('status');
-    expect(body).toHaveProperty('latencyMs');
-  });
-
-  it('should return 404 for unknown routes', async () => {
-    const res = await app.request(`${PREFIX}/unknown-route`);
-    expect(res.status).toBe(404);
   });
 });

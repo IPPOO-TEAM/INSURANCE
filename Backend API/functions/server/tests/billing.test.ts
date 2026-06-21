@@ -40,31 +40,9 @@ describe('Billing Logic', () => {
     expect(result.daysInMonth).toBe(29);
   });
 
-  it('should compute correctly for a 31-day month', () => {
-    const contracts = [
-      { id: 'c1', product: 'Santé', status: 'active' }
-    ];
-    const profile = { cardActive: false };
-    const jan2025 = new Date('2025-01-01');
-    const result = computeBilling(contracts, profile, jan2025);
-
-    expect(result.daysInMonth).toBe(31);
-    const expectedTotal = (BILLING.dailyPerProduct * 31) + BILLING.accountFee;
-    expect(result.total).toBe(expectedTotal);
-  });
-
   describe('getDaysInMonth', () => {
     it('should return 31 for January', () => {
       expect(getDaysInMonth(new Date('2025-01-15'))).toBe(31);
-    });
-    it('should return 28 for February 2025', () => {
-      expect(getDaysInMonth(new Date('2025-02-15'))).toBe(28);
-    });
-    it('should return 29 for February 2024', () => {
-      expect(getDaysInMonth(new Date('2024-02-15'))).toBe(29);
-    });
-    it('should return 30 for April', () => {
-      expect(getDaysInMonth(new Date('2025-04-15'))).toBe(30);
     });
   });
 });

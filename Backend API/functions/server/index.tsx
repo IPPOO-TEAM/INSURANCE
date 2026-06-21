@@ -7403,6 +7403,7 @@ app.post(`${PREFIX}/agent/kyc/:userId/:kycId/decision`, async (c) => {
     if (!bundle.current || bundle.current.id !== kycId) return c.json({ error: "Demande introuvable" }, 404);
     if (bundle.current.status !== "pending") return c.json({ error: "Déjà décidée" }, 409);
     const existingLock = (await kv.get(k.kycLock(userId, kycId))) as any;
+    // BUG AUDIT NOTE: Checking the lock here and setting the decision later is not atomic.
     if (
       existingLock?.expiresAt &&
       new Date(existingLock.expiresAt).getTime() > Date.now() &&
