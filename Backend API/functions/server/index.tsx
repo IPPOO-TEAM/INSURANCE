@@ -15,8 +15,9 @@ import {
   PaymentInitiateSchema, BeneficiaryCreateSchema, MessageCreateSchema, MessageEditSchema,
   SubscribeSchema, SettingsUpdateSchema, ChangePasswordSchema, RenewContractSchema,
 } from "./validators.ts";
+import { BILLING, computeBilling } from "./billing_logic.ts";
 
-const app = new Hono();
+export const app = new Hono();
 app.use("*", logger(console.log));
 app.use(
   "/*",
@@ -2530,39 +2531,6 @@ app.post(`${PREFIX}/admin/account/sweep`, async (c) => {
 });
 
 // ---- BILLING & MEMBER CARD ----
-const BILLING = {
-  dailyPerProduct: 500,
-  daysPerMonth: 31,
-  accountFee: 1000,
-  cardFee: 500,
-};
-
-function computeBilling(contracts: any[], profile: any) {
-  const perProduct = BILLING.dailyPerProduct * BILLING.daysPerMonth;
-  const active = (contracts ?? []).filter((c) => c.status === "active");
-  const items: any[] = active.map((c) => ({
-    kind: "insurance",
-    label: `Assurance — ${c.product}`,
-    contractId: c.id,
-    perDay: BILLING.dailyPerProduct,
-    days: BILLING.daysPerMonth,
-    amount: perProduct,
-  }));
-  items.push({ kind: "account_fee", label: "Frais de gestion de compte", amount: BILLING.accountFee });
-  if (profile?.cardActive) {
-    items.push({ kind: "card_fee", label: "Carte membre IPPOO", amount: BILLING.cardFee });
-  }
-  const total = items.reduce((s, it) => s + it.amount, 0);
-  return {
-    items,
-    total,
-    perInsurance: perProduct,
-    accountFee: BILLING.accountFee,
-    cardFee: BILLING.cardFee,
-    activeCount: active.length,
-    cycle: "mensuel",
-  };
-}
 
 app.get(`${PREFIX}/billing`, async (c) => {
   const { user, error } = await requireUser(c);
@@ -7378,6 +7346,8 @@ app.post(`${PREFIX}/agent/kyc/:userId/:kycId/lock`, async (c) => {
     const force = body?.force === true;
     const release = body?.release === true;
     const lockKey = k.kycLock(userId, kycId);
+    // BUG AUDIT NOTE: The following get-then-set pattern is not atomic.
+    // In a distributed environment, this may lead to race conditions.
     const existing = (await kv.get(lockKey)) as any;
     const now = Date.now();
     const stillValid = existing?.expiresAt && new Date(existing.expiresAt).getTime() > now;
@@ -7433,6 +7403,7 @@ app.post(`${PREFIX}/agent/kyc/:userId/:kycId/decision`, async (c) => {
     if (!bundle.current || bundle.current.id !== kycId) return c.json({ error: "Demande introuvable" }, 404);
     if (bundle.current.status !== "pending") return c.json({ error: "Déjà décidée" }, 409);
     const existingLock = (await kv.get(k.kycLock(userId, kycId))) as any;
+    // BUG AUDIT NOTE: Checking the lock here and setting the decision later is not atomic.
     if (
       existingLock?.expiresAt &&
       new Date(existingLock.expiresAt).getTime() > Date.now() &&
@@ -9482,4 +9453,6 @@ app.all("*", (c) => {
 // rev: 2026-05-29-20 (F13 health : /health enrichi { agentSignup, operations.agentsOnline, lastBillingRun } + /ping pong)
 // rev: 2026-05-29-21 (F14 sécurité : POST /admin/security/rotate-hmac — rotation atomique du secret HMAC, invalide tokens admin, audit prefix-only)
 // rev: 2026-05-29-22 (F16 2FA agent : agent:totp:<uid>, GET/POST /agent/2fa{,/enroll,/activate,/verify,/disable} ; gating requireAgent2FA sur /agent/payments,/subscribe,/claims/:/status,/kyc/:/decision)
-Deno.serve(app.fetch);
+if (import.meta.main) {
+  Deno.serve(app.fetch);
+}
