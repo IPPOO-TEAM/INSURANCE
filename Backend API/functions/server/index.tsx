@@ -8936,14 +8936,40 @@ async function logWebhookEvent(opts: {
   try {
     const id = `wh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const headers: Record<string, string> = {};
+    const sensitive = new Set([
+      "authorization",
+      "x-user-token",
+      "x-admin-token",
+      "x-agent-2fa-token",
+      "x-kkiapay-secret",
+      "x-fedapay-signature",
+      "x-callback-key",
+      "x-cinetpay-signature",
+      "x-token",
+    ]);
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
       if (raw && typeof raw.forEach === "function") {
-        raw.forEach((v: string, k: string) => { headers[k] = v.slice(0, 500); });
+        raw.forEach((v: string, k: string) => {
+          headers[k] = sensitive.has(k.toLowerCase()) ? "[REDACTED]" : v.slice(0, 500);
+        });
       } else if (opts.c?.req?.header) {
-        for (const h of ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature"]) {
+        for (const h of [
+          "content-type",
+          "user-agent",
+          "x-forwarded-for",
+          "x-kkiapay-secret",
+          "x-fedapay-signature",
+          "x-callback-key",
+          "x-cinetpay-signature",
+          "authorization",
+          "x-user-token",
+          "x-admin-token",
+          "x-agent-2fa-token",
+          "x-token",
+        ]) {
           const v = opts.c.req.header(h);
-          if (v) headers[h] = String(v).slice(0, 500);
+          if (v) headers[h] = sensitive.has(h.toLowerCase()) ? "[REDACTED]" : String(v).slice(0, 500);
         }
       }
     } catch { /* ignore */ }
