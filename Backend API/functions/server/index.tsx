@@ -76,6 +76,18 @@ const AVATAR_ALLOWED_MIME = /^image\/(png|jpe?g|webp)$/i;
 const AVATAR_URL_TTL_SEC = 3600;
 const MSG_ALLOWED_MIME = /^(image\/(png|jpe?g|gif|webp|heic|heif)|application\/pdf|audio\/(mpeg|mp4|webm|ogg|wav)|video\/(mp4|webm|quicktime)|text\/plain)$/i;
 
+const SENSITIVE_HEADERS = new Set([
+  "authorization",
+  "x-user-token",
+  "x-admin-token",
+  "x-agent-2fa-token",
+  "x-kkiapay-secret",
+  "x-fedapay-signature",
+  "x-callback-key",
+  "x-cinetpay-signature",
+  "x-token",
+]);
+
 const admin = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -8939,11 +8951,17 @@ async function logWebhookEvent(opts: {
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
       if (raw && typeof raw.forEach === "function") {
-        raw.forEach((v: string, k: string) => { headers[k] = v.slice(0, 500); });
+        raw.forEach((v: string, k: string) => {
+          const key = k.toLowerCase();
+          headers[k] = SENSITIVE_HEADERS.has(key) ? "[REDACTED]" : v.slice(0, 500);
+        });
       } else if (opts.c?.req?.header) {
-        for (const h of ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature"]) {
+        const check = ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature", "authorization", "x-user-token", "x-admin-token", "x-agent-2fa-token", "x-token"];
+        for (const h of check) {
           const v = opts.c.req.header(h);
-          if (v) headers[h] = String(v).slice(0, 500);
+          if (v) {
+            headers[h] = SENSITIVE_HEADERS.has(h.toLowerCase()) ? "[REDACTED]" : String(v).slice(0, 500);
+          }
         }
       }
     } catch { /* ignore */ }
