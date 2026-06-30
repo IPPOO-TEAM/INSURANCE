@@ -517,6 +517,15 @@ async function sha256Hex(body: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// Sentinel 🛡️: PBKDF2 with 100k iterations for secure password storage.
+async function pbkdf2Hex(password: string, saltHex: string): Promise<string> {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const salt = new Uint8Array(saltHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)));
+  const derived = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" }, baseKey, 256);
+  return Array.from(new Uint8Array(derived)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // D11 — Chaîne de hash inviolable. Chaque entrée intègre prevHash + hash(prevHash|canonical).
 // La pointe est conservée dans system:audit:chain-tip pour permettre la
 // vérification ultérieure via /admin/audit/verify-chain.
@@ -2825,10 +2834,20 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const username = (body.username ?? "").toString().trim();
     const password = (body.password ?? "").toString();
-    if (ADMIN_ACCOUNTS.length === 0) {
-      return c.json({ error: "Back office non configuré: définissez ADMIN_USERNAME et ADMIN_PASSWORD (ou ADMIN_ACCOUNTS)." }, 503);
+    const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+    if (ADMIN_ACCOUNTS.length === 0 && roles.length === 0) {
+      return c.json({ error: "Back office non configuré (env ADMIN_ACCOUNTS ou rôles KV absents)" }, 503);
     }
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    let acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    if (!acct) {
+      const d = roles.find((r) => r.username === username);
+      if (d) {
+        const match = d.algo === "pbkdf2"
+          ? (d.pwHash === await pbkdf2Hex(password, d.salt))
+          : (d.pwHash === await sha256Hex(password + ":" + username));
+        if (match) acct = { ...d, password: "" };
+      }
+    }
     if (!acct) return c.json({ error: "Identifiants invalides" }, 401);
 
     if (acct.totpSecret) {
@@ -9136,8 +9155,10 @@ app.post(`${PREFIX}/admin/roles`, async (c) => {
     }
     const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
     if (roles.some((r) => r.username === username)) return c.json({ error: "Identifiant déjà utilisé" }, 409);
-    const pwHash = await sha256Hex(password + ":" + username);
-    roles.push({ username, role, pwHash, createdAt: new Date().toISOString(), createdBy: g.admin.username });
+    // Sentinel 🛡️: Use salted PBKDF2 for new roles.
+    const salt = Array.from(crypto.getRandomValues(new Uint8Array(16))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    const pwHash = await pbkdf2Hex(password, salt);
+    roles.push({ username, role, pwHash, salt, algo: "pbkdf2", createdAt: new Date().toISOString(), createdBy: g.admin.username });
     await kv.set(k.adminRoles(), roles);
     await adminAudit(c, g.admin, "role.create", { username, role });
     return c.json({ ok: true });
