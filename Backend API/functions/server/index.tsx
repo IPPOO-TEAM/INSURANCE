@@ -517,6 +517,37 @@ async function sha256Hex(body: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// PBKDF2 with 100k iterations (SHA-256) for secure administrative credential storage.
+async function pbkdf2Hex(password: string, saltHex: string): Promise<string> {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"],
+  );
+  const salt = new Uint8Array(saltHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)));
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    keyMaterial,
+    256,
+  );
+  return Array.from(new Uint8Array(bits)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const SENSITIVE_HEADERS = new Set([
+  "authorization",
+  "x-user-token",
+  "x-admin-token",
+  "x-agent-2fa-token",
+  "x-kkiapay-secret",
+  "x-fedapay-signature",
+  "x-callback-key",
+  "x-cinetpay-signature",
+  "x-token",
+]);
+
 // D11 — Chaîne de hash inviolable. Chaque entrée intègre prevHash + hash(prevHash|canonical).
 // La pointe est conservée dans system:audit:chain-tip pour permettre la
 // vérification ultérieure via /admin/audit/verify-chain.
@@ -2828,7 +2859,20 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
     if (ADMIN_ACCOUNTS.length === 0) {
       return c.json({ error: "Back office non configuré: définissez ADMIN_USERNAME et ADMIN_PASSWORD (ou ADMIN_ACCOUNTS)." }, 503);
     }
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    let acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    if (!acct) {
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const r = roles.find((x) => x.username === username);
+      if (r) {
+        let match = false;
+        if (r.salt && r.pbkdf2Hash) {
+          match = (await pbkdf2Hex(password, r.salt)) === r.pbkdf2Hash;
+        } else if (r.pwHash) {
+          match = (await sha256Hex(password + ":" + username)) === r.pwHash;
+        }
+        if (match) acct = { username: r.username, password: "", role: r.role };
+      }
+    }
     if (!acct) return c.json({ error: "Identifiants invalides" }, 401);
 
     if (acct.totpSecret) {
@@ -8939,11 +8983,15 @@ async function logWebhookEvent(opts: {
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
       if (raw && typeof raw.forEach === "function") {
-        raw.forEach((v: string, k: string) => { headers[k] = v.slice(0, 500); });
+        raw.forEach((v: string, k: string) => {
+          headers[k] = SENSITIVE_HEADERS.has(k.toLowerCase()) ? "[REDACTED]" : v.slice(0, 500);
+        });
       } else if (opts.c?.req?.header) {
         for (const h of ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature"]) {
           const v = opts.c.req.header(h);
-          if (v) headers[h] = String(v).slice(0, 500);
+          if (v) {
+            headers[h] = SENSITIVE_HEADERS.has(h.toLowerCase()) ? "[REDACTED]" : String(v).slice(0, 500);
+          }
         }
       }
     } catch { /* ignore */ }
@@ -9136,8 +9184,9 @@ app.post(`${PREFIX}/admin/roles`, async (c) => {
     }
     const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
     if (roles.some((r) => r.username === username)) return c.json({ error: "Identifiant déjà utilisé" }, 409);
-    const pwHash = await sha256Hex(password + ":" + username);
-    roles.push({ username, role, pwHash, createdAt: new Date().toISOString(), createdBy: g.admin.username });
+    const salt = Array.from(crypto.getRandomValues(new Uint8Array(16))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    const pbkdf2Hash = await pbkdf2Hex(password, salt);
+    roles.push({ username, role, salt, pbkdf2Hash, createdAt: new Date().toISOString(), createdBy: g.admin.username });
     await kv.set(k.adminRoles(), roles);
     await adminAudit(c, g.admin, "role.create", { username, role });
     return c.json({ ok: true });
