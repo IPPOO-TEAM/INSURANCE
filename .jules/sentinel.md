@@ -1,0 +1,4 @@
+## 2025-05-14 - Insecure Password Hashing and Inactive Admin KV Fallback
+**Vulnerability:** Admin roles were hashed using `sha256Hex(password + ":" + username)`, which lacks the computational cost (iterations) and strong salting of modern standards, making it vulnerable to brute-force and rainbow table attacks. Additionally, the system intended to support dynamic admin accounts in KV, but the login endpoint only checked static environment credentials.
+**Learning:** Initial bootstrap implementations often prioritize functionality over security by using simple hash functions. In serverless environments, it's important to balance the computational cost of slow hashes (like PBKDF2) with platform execution limits.
+**Prevention:** Always use slow, salted hashing functions like PBKDF2, Argon2, or bcrypt for password storage from the start. Ensure that all intended authentication pathways (static vs dynamic) are fully implemented and tested.
