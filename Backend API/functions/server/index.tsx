@@ -517,6 +517,12 @@ async function sha256Hex(body: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+async function pbkdf2Hex(password: string, salt: string): Promise<string> {
+  const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const derived = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations: 100_000, hash: "SHA-256" }, baseKey, 256);
+  return Array.from(new Uint8Array(derived)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // D11 — Chaîne de hash inviolable. Chaque entrée intègre prevHash + hash(prevHash|canonical).
 // La pointe est conservée dans system:audit:chain-tip pour permettre la
 // vérification ultérieure via /admin/audit/verify-chain.
@@ -2828,7 +2834,17 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
     if (ADMIN_ACCOUNTS.length === 0) {
       return c.json({ error: "Back office non configuré: définissez ADMIN_USERNAME et ADMIN_PASSWORD (ou ADMIN_ACCOUNTS)." }, 503);
     }
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    let acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    if (!acct) {
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const roleAcct = roles.find((r) => r.username === username);
+      if (roleAcct) {
+        const matches = roleAcct.salt
+          ? (await pbkdf2Hex(password, roleAcct.salt) === roleAcct.pwHash)
+          : (await sha256Hex(password + ":" + username) === roleAcct.pwHash);
+        if (matches) acct = { username: roleAcct.username, password: "", role: roleAcct.role, totpSecret: roleAcct.totpSecret };
+      }
+    }
     if (!acct) return c.json({ error: "Identifiants invalides" }, 401);
 
     if (acct.totpSecret) {
@@ -2860,7 +2876,12 @@ app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
     const payload = await verifyToken<{ kind: string; username: string; role: string; exp: number }>(challenge);
     if (!payload || payload.kind !== "admin-2fa") return c.json({ error: "Challenge invalide" }, 401);
     if (Date.now() / 1000 > payload.exp) return c.json({ error: "Challenge expiré" }, 401);
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
+    let acct = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
+    if (!acct) {
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const roleAcct = roles.find((r) => r.username === payload.username);
+      if (roleAcct) acct = { username: roleAcct.username, password: "", role: roleAcct.role, totpSecret: roleAcct.totpSecret };
+    }
     if (!acct?.totpSecret) return c.json({ error: "Compte sans 2FA" }, 400);
     if (!(await verifyTotp(acct.totpSecret, code))) return c.json({ error: "Code invalide" }, 401);
     const exp = Math.floor(Date.now() / 1000) + ADMIN_TOKEN_TTL_SEC;
@@ -8924,6 +8945,8 @@ app.get(`${PREFIX}/wallet/apple`, (c) => {
 // Pour chaque webhook PSP entrant, on persiste un événement complet
 // (provider, status, raison, headers, body brut tronqué) dans un ring
 // borné à 500. Permet la replay/diagnostic depuis le back-office.
+const SENSITIVE_HEADERS = new Set(["authorization", "cookie", "x-user-token", "x-admin-token", "x-agent-2fa-token", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature", "x-token"]);
+
 async function logWebhookEvent(opts: {
   provider: string;
   c: any;
@@ -8939,11 +8962,13 @@ async function logWebhookEvent(opts: {
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
       if (raw && typeof raw.forEach === "function") {
-        raw.forEach((v: string, k: string) => { headers[k] = v.slice(0, 500); });
+        raw.forEach((v: string, k: string) => {
+          headers[k] = SENSITIVE_HEADERS.has(k.toLowerCase()) ? "[REDACTED]" : v.slice(0, 500);
+        });
       } else if (opts.c?.req?.header) {
         for (const h of ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature"]) {
           const v = opts.c.req.header(h);
-          if (v) headers[h] = String(v).slice(0, 500);
+          if (v) headers[h] = SENSITIVE_HEADERS.has(h.toLowerCase()) ? "[REDACTED]" : String(v).slice(0, 500);
         }
       }
     } catch { /* ignore */ }
@@ -9136,8 +9161,9 @@ app.post(`${PREFIX}/admin/roles`, async (c) => {
     }
     const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
     if (roles.some((r) => r.username === username)) return c.json({ error: "Identifiant déjà utilisé" }, 409);
-    const pwHash = await sha256Hex(password + ":" + username);
-    roles.push({ username, role, pwHash, createdAt: new Date().toISOString(), createdBy: g.admin.username });
+    const salt = crypto.randomUUID();
+    const pwHash = await pbkdf2Hex(password, salt);
+    roles.push({ username, role, pwHash, salt, createdAt: new Date().toISOString(), createdBy: g.admin.username });
     await kv.set(k.adminRoles(), roles);
     await adminAudit(c, g.admin, "role.create", { username, role });
     return c.json({ ok: true });
