@@ -1,0 +1,4 @@
+## 2026-07-07 - SQL Injection in Supabase Filter & Sensitive Log Leakage
+**Vulnerability:** Manual string construction in Supabase .not('id', 'in', '(...)') filters created a SQL injection risk. Additionally, webhook logs persisted sensitive headers like Authorization and provider secrets in plaintext.
+**Learning:** Even when using higher-level DB clients like Supabase (PostgREST), manually building filter strings instead of passing arrays to library methods can bypass safe parameterization. Log functions often default to capturing all headers, which can leak secrets.
+**Prevention:** Always pass raw data/arrays to library methods (e.g., .in('id', array)) instead of manually interpolating strings. Explicitly redact sensitive keys (Authorization, Cookies, API Keys) in any logging function that captures request/response headers.

@@ -8924,6 +8924,11 @@ app.get(`${PREFIX}/wallet/apple`, (c) => {
 // Pour chaque webhook PSP entrant, on persiste un événement complet
 // (provider, status, raison, headers, body brut tronqué) dans un ring
 // borné à 500. Permet la replay/diagnostic depuis le back-office.
+const SENSITIVE_HEADERS = new Set([
+  "authorization", "cookie", "x-user-token", "x-admin-token",
+  "x-agent-2fa-token", "x-kkiapay-secret", "x-fedapay-signature",
+  "x-callback-key", "x-cinetpay-signature", "x-token",
+]);
 async function logWebhookEvent(opts: {
   provider: string;
   c: any;
@@ -8939,11 +8944,16 @@ async function logWebhookEvent(opts: {
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
       if (raw && typeof raw.forEach === "function") {
-        raw.forEach((v: string, k: string) => { headers[k] = v.slice(0, 500); });
+        raw.forEach((v: string, k: string) => {
+          const kl = k.toLowerCase();
+          headers[k] = SENSITIVE_HEADERS.has(kl) ? "[REDACTED]" : v.slice(0, 500);
+        });
       } else if (opts.c?.req?.header) {
-        for (const h of ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature"]) {
+        for (const h of ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature", "authorization", "x-token"]) {
           const v = opts.c.req.header(h);
-          if (v) headers[h] = String(v).slice(0, 500);
+          if (v) {
+            headers[h] = SENSITIVE_HEADERS.has(h.toLowerCase()) ? "[REDACTED]" : String(v).slice(0, 500);
+          }
         }
       }
     } catch { /* ignore */ }
