@@ -8921,6 +8921,19 @@ app.get(`${PREFIX}/wallet/apple`, (c) => {
 // =====================================================================
 
 // ---- D1 — Journal des webhooks PSP ----------------------------------
+const SENSITIVE_HEADERS = new Set([
+  "authorization",
+  "cookie",
+  "x-user-token",
+  "x-admin-token",
+  "x-agent-2fa-token",
+  "x-kkiapay-secret",
+  "x-fedapay-signature",
+  "x-callback-key",
+  "x-cinetpay-signature",
+  "x-token",
+]);
+
 // Pour chaque webhook PSP entrant, on persiste un événement complet
 // (provider, status, raison, headers, body brut tronqué) dans un ring
 // borné à 500. Permet la replay/diagnostic depuis le back-office.
@@ -8939,11 +8952,17 @@ async function logWebhookEvent(opts: {
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
       if (raw && typeof raw.forEach === "function") {
-        raw.forEach((v: string, k: string) => { headers[k] = v.slice(0, 500); });
+        raw.forEach((v: string, k: string) => {
+          const lowerK = k.toLowerCase();
+          headers[k] = SENSITIVE_HEADERS.has(lowerK) ? "[REDACTED]" : v.slice(0, 500);
+        });
       } else if (opts.c?.req?.header) {
         for (const h of ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature"]) {
           const v = opts.c.req.header(h);
-          if (v) headers[h] = String(v).slice(0, 500);
+          if (v) {
+            const lowerH = h.toLowerCase();
+            headers[h] = SENSITIVE_HEADERS.has(lowerH) ? "[REDACTED]" : String(v).slice(0, 500);
+          }
         }
       }
     } catch { /* ignore */ }
