@@ -1,0 +1,4 @@
+## 2025-05-30 - Rate-Limiting Bypass via Argument Misordering
+**Vulnerability:** A rate-limiting bypass was discovered in the admin login and 2FA endpoints. The `guardRate` utility was called with misordered arguments, resulting in the `windowSec` parameter being `undefined`.
+**Learning:** The `guardRate` function signature is `(c, scope, id, max, windowSec)`. In the affected endpoints, it was called as `guardRate(c, scope:id, max, windowSec)`, which caused `id` to be treated as `max`, `max` as `windowSec`, and `windowSec` to be `undefined`. Without a window, the rate-limiting logic failed to enforce time-based restrictions.
+**Prevention:** Use named arguments or object-based parameters for functions with many arguments to prevent order-based bugs. Always verify that security-critical guards are receiving the expected parameters through unit tests.
