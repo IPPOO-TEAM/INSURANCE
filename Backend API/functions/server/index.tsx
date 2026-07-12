@@ -2819,7 +2819,9 @@ app.delete(`${PREFIX}/auth/webauthn/:credId`, async (c) => {
 
 app.post(`${PREFIX}/admin/login`, async (c) => {
   const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-login:${ip}`, 5, 600);
+  // D14 — Security: Corrected rate-limiting guard. Swapped arguments were
+  // causing windowSec to be undefined, bypassing the limit.
+  const limited = await guardRate(c, "admin-login", ip, 5, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -2850,7 +2852,9 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
 
 app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
   const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-2fa:${ip}`, 8, 600);
+  // D14 — Security: Corrected rate-limiting guard. Swapped arguments were
+  // causing windowSec to be undefined, bypassing the limit.
+  const limited = await guardRate(c, "admin-2fa", ip, 8, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
