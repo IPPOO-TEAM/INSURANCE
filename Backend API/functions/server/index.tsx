@@ -520,9 +520,22 @@ async function sha256Hex(body: string): Promise<string> {
 // D11 — Chaîne de hash inviolable. Chaque entrée intègre prevHash + hash(prevHash|canonical).
 // La pointe est conservée dans system:audit:chain-tip pour permettre la
 // vérification ultérieure via /admin/audit/verify-chain.
+
+/**
+ * Recovers the client IP, prioritizing Cloudflare's cf-connecting-ip.
+ * Prevents IP spoofing via x-forwarded-for in environments behind CF.
+ */
+function getClientIP(c: any, fallback = "unknown"): string {
+  return (
+    c.req.header("cf-connecting-ip") ||
+    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
+    fallback
+  );
+}
+
 async function adminAudit(c: any, admin: { username: string; role?: string }, action: string, meta: Record<string, any> = {}) {
   try {
-    const ip = c?.req?.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+    const ip = getClientIP(c, "anon");
     const ua = (c?.req?.header("user-agent") ?? "").slice(0, 200);
     const id = `aa_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const at = new Date().toISOString();
@@ -831,7 +844,7 @@ app.get(`${PREFIX}/ping`, (c) => c.text("pong", 200, { "Cache-Control": "no-stor
 
 app.post(`${PREFIX}/signup`, async (c) => {
   try {
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = getClientIP(c);
     const allowed = await rateLimit(`signup:${ip}`, 20, 1800);
     if (!allowed) return c.json({ error: "Trop de tentatives, réessayez dans 30 min." }, 429);
     const parsed = await parseBody(c, SignupSchema);
@@ -1038,7 +1051,7 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const phone = normalizePhone(String(body?.phone ?? ""));
     if (!/^\d{8,15}$/.test(phone)) return c.json({ error: "Numéro invalide" }, 400);
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = getClientIP(c);
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
     const code = String(Math.floor(100000 + Math.random() * 900000));
@@ -1057,7 +1070,7 @@ app.post(`${PREFIX}/phone/otp/verify`, async (c) => {
     const phone = normalizePhone(String(body?.phone ?? ""));
     const code = String(body?.code ?? "").trim();
     if (!/^\d{8,15}$/.test(phone) || !/^\d{6}$/.test(code)) return c.json({ error: "Données invalides" }, 400);
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = getClientIP(c);
     if (!(await rateLimit(`otp-verify-ip:${ip}`, 20, 3600))) return c.json({ error: "Trop de tentatives." }, 429);
     const rec = (await kv.get(k.phoneOtp(phone))) as { hash: string; attempts: number; expiresAt: number } | null;
     if (!rec) return c.json({ error: "Code expiré ou inconnu" }, 410);
@@ -1092,7 +1105,7 @@ app.post(`${PREFIX}/consents`, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const items = Array.isArray(body?.items) ? body.items : [];
     const ALLOWED = new Set(["cgu", "confidentialite", "traitement", "ars", "marketing"]);
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = getClientIP(c);
     const userAgent = c.req.header("user-agent") ?? "unknown";
     const now = new Date().toISOString();
     const prev = ((await kv.get(k.consents(user.id))) ?? []) as any[];
@@ -2641,7 +2654,7 @@ app.get(`${PREFIX}/me/qr-token`, async (c) => {
 // Exchange QR token → magic link (client completes via supabase.auth.verifyOtp)
 app.post(`${PREFIX}/auth/qr-login`, async (c) => {
   try {
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = getClientIP(c);
     const allowed = await rateLimit(`qrlogin:${ip}`, 10, 600);
     if (!allowed) return c.json({ error: "Trop de tentatives, patientez." }, 429);
     const { token } = (await c.req.json()) ?? {};
@@ -2751,7 +2764,7 @@ app.post(`${PREFIX}/auth/webauthn/login/options`, async (c) => {
 
 app.post(`${PREFIX}/auth/webauthn/login/verify`, async (c) => {
   try {
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = getClientIP(c);
     const allowed = await rateLimit(`biolog:${ip}`, 10, 600);
     if (!allowed) return c.json({ error: "Trop de tentatives, patientez." }, 429);
     const { email, response } = (await c.req.json()) ?? {};
@@ -2818,7 +2831,7 @@ app.delete(`${PREFIX}/auth/webauthn/:credId`, async (c) => {
 // header. The Supabase users table is NEVER consulted for admin access.
 
 app.post(`${PREFIX}/admin/login`, async (c) => {
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+  const ip = getClientIP(c, "anon");
   const limited = await guardRate(c, `admin-login:${ip}`, 5, 600);
   if (limited) return limited;
   try {
@@ -2849,7 +2862,7 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
 });
 
 app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+  const ip = getClientIP(c, "anon");
   const limited = await guardRate(c, `admin-2fa:${ip}`, 8, 600);
   if (limited) return limited;
   try {
@@ -4632,7 +4645,7 @@ app.post(`${PREFIX}/admin/dev/seed-demo`, async (c) => {
 // 500 entrées). Optionnellement forwardé à Sentry si SENTRY_DSN est défini.
 app.post(`${PREFIX}/client-error`, async (c) => {
   try {
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = getClientIP(c);
     if (!(await rateLimit(`client-err:${ip}`, 30, 60))) return c.json({ ok: false, throttled: true }, 200);
     const body = await c.req.json().catch(() => ({}));
     const entry = {
@@ -5075,7 +5088,7 @@ app.patch(`${PREFIX}/agent/messages/:uid/meta`, async (c) => {
 // `user_metadata.role = "agent"` directement, pré-résout son matricule.
 app.post(`${PREFIX}/agent/signup`, async (c) => {
   try {
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = getClientIP(c);
     const allowed = await rateLimit(`agent-signup:${ip}`, 5, 600);
     if (!allowed) return c.json({ error: "Trop de tentatives, réessayez dans 10 min." }, 429);
 
@@ -8607,7 +8620,7 @@ app.post(`${PREFIX}/consents`, async (c) => {
     const body = await c.req.json();
     const items = Array.isArray(body?.items) ? body.items : [];
     if (items.length === 0) return c.json({ error: "Aucun consentement fourni" }, 400);
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = getClientIP(c);
     const ua = c.req.header("user-agent") ?? "";
     const at = new Date().toISOString();
     const accepted = ["cgu", "confidentialite", "traitement", "ars", "marketing"];
@@ -8924,6 +8937,11 @@ app.get(`${PREFIX}/wallet/apple`, (c) => {
 // Pour chaque webhook PSP entrant, on persiste un événement complet
 // (provider, status, raison, headers, body brut tronqué) dans un ring
 // borné à 500. Permet la replay/diagnostic depuis le back-office.
+const SENSITIVE_HEADERS = new Set([
+  "authorization", "cookie", "x-user-token", "x-admin-token", "x-agent-2fa-token",
+  "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature", "x-token",
+]);
+
 async function logWebhookEvent(opts: {
   provider: string;
   c: any;
@@ -8939,11 +8957,15 @@ async function logWebhookEvent(opts: {
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
       if (raw && typeof raw.forEach === "function") {
-        raw.forEach((v: string, k: string) => { headers[k] = v.slice(0, 500); });
+        raw.forEach((v: string, k: string) => {
+          headers[k] = SENSITIVE_HEADERS.has(k.toLowerCase()) ? "[REDACTED]" : v.slice(0, 500);
+        });
       } else if (opts.c?.req?.header) {
         for (const h of ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature"]) {
           const v = opts.c.req.header(h);
-          if (v) headers[h] = String(v).slice(0, 500);
+          if (v) {
+            headers[h] = SENSITIVE_HEADERS.has(h.toLowerCase()) ? "[REDACTED]" : String(v).slice(0, 500);
+          }
         }
       }
     } catch { /* ignore */ }
@@ -8981,7 +9003,7 @@ async function logWebhookEvent(opts: {
 // ---- D9 — Persistance des sessions admin ----------------------------
 async function persistAdminSession(c: any, jti: string, username: string, role: string, expiresAtMs: number) {
   try {
-    const ip = c?.req?.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+    const ip = getClientIP(c, "anon");
     const ua = (c?.req?.header("user-agent") ?? "").slice(0, 200);
     const session = {
       jti, username, role, ip, ua,
