@@ -517,12 +517,35 @@ async function sha256Hex(body: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function getClientIP(c: any): string {
+  const h = c?.req?.header;
+  if (typeof h !== "function") return "anon";
+  return (
+    c.req.header("cf-connecting-ip") ||
+    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "anon"
+  );
+}
+
+const SENSITIVE_HEADERS = new Set([
+  "authorization",
+  "cookie",
+  "x-user-token",
+  "x-admin-token",
+  "x-agent-2fa-token",
+  "x-kkiapay-secret",
+  "x-fedapay-signature",
+  "x-callback-key",
+  "x-cinetpay-signature",
+  "x-token",
+]);
+
 // D11 — Chaîne de hash inviolable. Chaque entrée intègre prevHash + hash(prevHash|canonical).
 // La pointe est conservée dans system:audit:chain-tip pour permettre la
 // vérification ultérieure via /admin/audit/verify-chain.
 async function adminAudit(c: any, admin: { username: string; role?: string }, action: string, meta: Record<string, any> = {}) {
   try {
-    const ip = c?.req?.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+    const ip = getClientIP(c);
     const ua = (c?.req?.header("user-agent") ?? "").slice(0, 200);
     const id = `aa_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const at = new Date().toISOString();
@@ -2818,8 +2841,8 @@ app.delete(`${PREFIX}/auth/webauthn/:credId`, async (c) => {
 // header. The Supabase users table is NEVER consulted for admin access.
 
 app.post(`${PREFIX}/admin/login`, async (c) => {
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-login:${ip}`, 5, 600);
+  const ip = getClientIP(c);
+  const limited = await guardRate(c, "admin-login", ip, 5, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -2849,8 +2872,8 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
 });
 
 app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-2fa:${ip}`, 8, 600);
+  const ip = getClientIP(c);
+  const limited = await guardRate(c, "admin-2fa", ip, 8, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -8939,11 +8962,15 @@ async function logWebhookEvent(opts: {
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
       if (raw && typeof raw.forEach === "function") {
-        raw.forEach((v: string, k: string) => { headers[k] = v.slice(0, 500); });
+        raw.forEach((v: string, k: string) => {
+          headers[k] = SENSITIVE_HEADERS.has(k.toLowerCase()) ? "[REDACTED]" : v.slice(0, 500);
+        });
       } else if (opts.c?.req?.header) {
         for (const h of ["content-type", "user-agent", "x-forwarded-for", "x-kkiapay-secret", "x-fedapay-signature", "x-callback-key", "x-cinetpay-signature"]) {
           const v = opts.c.req.header(h);
-          if (v) headers[h] = String(v).slice(0, 500);
+          if (v) {
+            headers[h] = SENSITIVE_HEADERS.has(h.toLowerCase()) ? "[REDACTED]" : String(v).slice(0, 500);
+          }
         }
       }
     } catch { /* ignore */ }
