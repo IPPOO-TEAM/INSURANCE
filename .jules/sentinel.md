@@ -1,0 +1,4 @@
+## 2025-05-15 - [Security Enhancements and Fixes]
+**Vulnerability:** 1. Sensitive headers (PSP secrets, session tokens) were being logged in plaintext in the webhook event log. 2. Admin login rate limiting was bypassable due to misordered arguments in `guardRate` calls, which left the `windowSec` parameter undefined. 3. IP detection was susceptible to spoofing as it didn't prioritize Cloudflare's verified IP header.
+**Learning:** Rate-limiting logic is fragile when parameter order is not strictly enforced by types (e.g., passing strings where numbers are expected in untyped middleware). Centralized helpers are essential for consistent security posture across many endpoints.
+**Prevention:** 1. Use `getClientIP(c)` for all IP attribution. 2. Always redact headers against `SENSITIVE_HEADERS` before storage. 3. Use typed wrappers for rate limiting to prevent parameter misalignment.
