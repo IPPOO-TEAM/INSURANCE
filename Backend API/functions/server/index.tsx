@@ -2828,7 +2828,20 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
     if (ADMIN_ACCOUNTS.length === 0) {
       return c.json({ error: "Back office non configuré: définissez ADMIN_USERNAME et ADMIN_PASSWORD (ou ADMIN_ACCOUNTS)." }, 503);
     }
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    let acct: { username: string; role: "superadmin" | "operator" | "support"; totpSecret?: string } | undefined = ADMIN_ACCOUNTS.find(
+      (a) => a.username === username && a.password === password
+    );
+    if (!acct) {
+      // Security: Query dynamically created administrator accounts from the system roles KV key
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const dynamicAcct = roles.find((r) => r.username === username);
+      if (dynamicAcct) {
+        const hash = await sha256Hex(password + ":" + username);
+        if (dynamicAcct.pwHash === hash) {
+          acct = { username: dynamicAcct.username, role: dynamicAcct.role, totpSecret: dynamicAcct.totpSecret };
+        }
+      }
+    }
     if (!acct) return c.json({ error: "Identifiants invalides" }, 401);
 
     if (acct.totpSecret) {
@@ -2860,7 +2873,15 @@ app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
     const payload = await verifyToken<{ kind: string; username: string; role: string; exp: number }>(challenge);
     if (!payload || payload.kind !== "admin-2fa") return c.json({ error: "Challenge invalide" }, 401);
     if (Date.now() / 1000 > payload.exp) return c.json({ error: "Challenge expiré" }, 401);
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
+    let acct: { username: string; role: string; totpSecret?: string } | undefined = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
+    if (!acct) {
+      // Security: Query dynamic administrators to verify and load their account context
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const dynamicAcct = roles.find((r) => r.username === payload.username);
+      if (dynamicAcct) {
+        acct = { username: dynamicAcct.username, role: dynamicAcct.role, totpSecret: dynamicAcct.totpSecret };
+      }
+    }
     if (!acct?.totpSecret) return c.json({ error: "Compte sans 2FA" }, 400);
     if (!(await verifyTotp(acct.totpSecret, code))) return c.json({ error: "Code invalide" }, 401);
     const exp = Math.floor(Date.now() / 1000) + ADMIN_TOKEN_TTL_SEC;
