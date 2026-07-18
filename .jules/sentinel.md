@@ -1,0 +1,4 @@
+## 2026-07-18 - Admin Login Dynamic Account Authentication Gap
+**Vulnerability:** Dynamically created admin accounts from the `system:admin:roles` KV store were completely unable to log in because the `/admin/login` and `/admin/login/2fa` endpoints only verified credentials against static environment variables (`ADMIN_ACCOUNTS`), ignoring dynamic database entries.
+**Learning:** Authentication mechanisms must be updated symmetrically when dynamic database storage is introduced alongside static configurations. When adding dynamic registration and user management, verify that login/session pathways are also integrated to consult the same dynamic database storage.
+**Prevention:** Always maintain a shared account resolution strategy that queries both static environmental accounts and dynamic persistent accounts, and write end-to-end authentication tests that cover both static and dynamic credential sets.
