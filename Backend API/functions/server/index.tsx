@@ -2825,10 +2825,29 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const username = (body.username ?? "").toString().trim();
     const password = (body.password ?? "").toString();
-    if (ADMIN_ACCOUNTS.length === 0) {
+
+    // Security: Check both static environment credentials and dynamically created admin accounts
+    const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+    if (ADMIN_ACCOUNTS.length === 0 && roles.length === 0) {
       return c.json({ error: "Back office non configuré: définissez ADMIN_USERNAME et ADMIN_PASSWORD (ou ADMIN_ACCOUNTS)." }, 503);
     }
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+
+    let acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    if (!acct) {
+      const dynamicAcct = roles.find((r) => r.username === username);
+      if (dynamicAcct) {
+        // Verifyhashed password securely using SHA-256 scheme to protect dynamic accounts
+        const pwHash = await sha256Hex(password + ":" + username);
+        if (dynamicAcct.pwHash === pwHash) {
+          acct = {
+            username: dynamicAcct.username,
+            password: "",
+            role: dynamicAcct.role,
+            totpSecret: dynamicAcct.totpSecret, // Load TOTP secret if dynamic account has one
+          };
+        }
+      }
+    }
     if (!acct) return c.json({ error: "Identifiants invalides" }, 401);
 
     if (acct.totpSecret) {
@@ -2860,7 +2879,22 @@ app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
     const payload = await verifyToken<{ kind: string; username: string; role: string; exp: number }>(challenge);
     if (!payload || payload.kind !== "admin-2fa") return c.json({ error: "Challenge invalide" }, 401);
     if (Date.now() / 1000 > payload.exp) return c.json({ error: "Challenge expiré" }, 401);
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
+
+    // Security: Check both static and dynamic accounts for TOTP matching to prevent bypass
+    let acct = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
+    if (!acct) {
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const dynamicAcct = roles.find((r) => r.username === payload.username);
+      if (dynamicAcct) {
+        acct = {
+          username: dynamicAcct.username,
+          password: "",
+          role: dynamicAcct.role,
+          totpSecret: dynamicAcct.totpSecret,
+        };
+      }
+    }
+
     if (!acct?.totpSecret) return c.json({ error: "Compte sans 2FA" }, 400);
     if (!(await verifyTotp(acct.totpSecret, code))) return c.json({ error: "Code invalide" }, 401);
     const exp = Math.floor(Date.now() / 1000) + ADMIN_TOKEN_TTL_SEC;

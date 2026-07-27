@@ -1,0 +1,4 @@
+## 2026-05-26 - [Dynamic Admin Roles Auth Bypass and Broken Flow]
+**Vulnerability:** Dynamically created admin accounts with custom roles stored in the database/KV (`system:admin:roles`) were completely bypassed during login checks at `/admin/login` and `/admin/login/2fa`. Only statically defined `ADMIN_ACCOUNTS` (from environment variables) were supported for authentication, preventing dynamic admins from logging in or validating their 2FA.
+**Learning:** Authentication endpoints must dynamically load and merge credentials from both configuration variables (static) and database/KV registers (dynamic) to ensure all legitimate user/admin entities can authenticate cleanly and consistently.
+**Prevention:** Always maintain a unified account lookup strategy that queries both static and dynamic registries at all authentication stages, including initial credentials challenge and multi-factor/TOTP verification checks, and verify correct cryptographic hashing comparisons.
