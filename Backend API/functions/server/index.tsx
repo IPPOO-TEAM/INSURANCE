@@ -517,12 +517,24 @@ async function sha256Hex(body: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// Security Pattern: Defensive client IP resolution behind Cloudflare
+function getClientIP(c: any, fallback = "anon"): string {
+  if (!c || !c.req || typeof c.req.header !== "function") {
+    return fallback;
+  }
+  const cf = c.req.header("cf-connecting-ip");
+  if (cf) return cf.trim();
+  const xff = c.req.header("x-forwarded-for");
+  if (xff) return xff.split(",")[0].trim();
+  return fallback;
+}
+
 // D11 — Chaîne de hash inviolable. Chaque entrée intègre prevHash + hash(prevHash|canonical).
 // La pointe est conservée dans system:audit:chain-tip pour permettre la
 // vérification ultérieure via /admin/audit/verify-chain.
 async function adminAudit(c: any, admin: { username: string; role?: string }, action: string, meta: Record<string, any> = {}) {
   try {
-    const ip = c?.req?.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+    const ip = getClientIP(c, "anon");
     const ua = (c?.req?.header("user-agent") ?? "").slice(0, 200);
     const id = `aa_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const at = new Date().toISOString();
@@ -2818,7 +2830,7 @@ app.delete(`${PREFIX}/auth/webauthn/:credId`, async (c) => {
 // header. The Supabase users table is NEVER consulted for admin access.
 
 app.post(`${PREFIX}/admin/login`, async (c) => {
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+  const ip = getClientIP(c, "anon");
   const limited = await guardRate(c, `admin-login:${ip}`, 5, 600);
   if (limited) return limited;
   try {
@@ -2849,7 +2861,7 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
 });
 
 app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+  const ip = getClientIP(c, "anon");
   const limited = await guardRate(c, `admin-2fa:${ip}`, 8, 600);
   if (limited) return limited;
   try {
