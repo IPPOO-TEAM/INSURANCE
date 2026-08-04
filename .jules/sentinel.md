@@ -1,0 +1,4 @@
+## 2026-06-12 - Missing authentication integration for dynamic admin roles
+**Vulnerability:** Dynamically created admin accounts stored in the `system:admin:roles` KV store could not actually authenticate because the `/admin/login` and `/admin/login/2fa` endpoints solely queried the hardcoded static `ADMIN_ACCOUNTS` list. This effectively bypassed/rendered useless the dynamic admin creation features and restricted proper authentication management.
+**Learning:** Separate modules or features for role management (like D3 admin roles) and login handler isolation led to a disconnect, where one part of the app managed dynamically created credentials but the login handlers did not integrate them.
+**Prevention:** Ensure that login or credential-checking endpoints are always designed with dynamic credential stores in mind, combining both static/bootstrap credentials and dynamic credentials using unified helpers like `getAdminAccount()`.

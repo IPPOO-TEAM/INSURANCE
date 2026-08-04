@@ -139,7 +139,7 @@ const ADMIN_USERNAME = (Deno.env.get("ADMIN_USERNAME") ?? "").trim();
 const ADMIN_PASSWORD = (Deno.env.get("ADMIN_PASSWORD") ?? "").trim();
 const ADMIN_TOKEN_TTL_SEC = 60 * 60 * 8; // 8h
 
-type AdminAccount = { username: string; password: string; role: "superadmin" | "operator" | "support"; totpSecret?: string };
+type AdminAccount = { username: string; password?: string; role: "superadmin" | "operator" | "support"; totpSecret?: string; pwHash?: string };
 function loadAdminAccounts(): AdminAccount[] {
   const raw = Deno.env.get("ADMIN_ACCOUNTS");
   if (raw) {
@@ -2817,6 +2817,22 @@ app.delete(`${PREFIX}/auth/webauthn/:credId`, async (c) => {
 // (ADMIN_USERNAME / ADMIN_PASSWORD), HMAC-signed session token, X-Admin-Token
 // header. The Supabase users table is NEVER consulted for admin access.
 
+async function getAdminAccount(username: string): Promise<AdminAccount | null> {
+  const staticAcct = ADMIN_ACCOUNTS.find((a) => a.username === username);
+  if (staticAcct) return staticAcct;
+  const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+  const dynamicAcct = roles.find((r) => r.username === username);
+  if (dynamicAcct) {
+    return {
+      username: dynamicAcct.username,
+      role: dynamicAcct.role,
+      pwHash: dynamicAcct.pwHash,
+      totpSecret: dynamicAcct.totpSecret,
+    };
+  }
+  return null;
+}
+
 app.post(`${PREFIX}/admin/login`, async (c) => {
   const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
   const limited = await guardRate(c, `admin-login:${ip}`, 5, 600);
@@ -2828,8 +2844,16 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
     if (ADMIN_ACCOUNTS.length === 0) {
       return c.json({ error: "Back office non configuré: définissez ADMIN_USERNAME et ADMIN_PASSWORD (ou ADMIN_ACCOUNTS)." }, 503);
     }
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    const acct = await getAdminAccount(username);
     if (!acct) return c.json({ error: "Identifiants invalides" }, 401);
+
+    let pwValid = false;
+    if (acct.password !== undefined) {
+      pwValid = acct.password === password;
+    } else if (acct.pwHash !== undefined) {
+      pwValid = acct.pwHash === (await sha256Hex(password + ":" + username));
+    }
+    if (!pwValid) return c.json({ error: "Identifiants invalides" }, 401);
 
     if (acct.totpSecret) {
       const challengeExp = Math.floor(Date.now() / 1000) + 5 * 60;
@@ -2860,7 +2884,7 @@ app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
     const payload = await verifyToken<{ kind: string; username: string; role: string; exp: number }>(challenge);
     if (!payload || payload.kind !== "admin-2fa") return c.json({ error: "Challenge invalide" }, 401);
     if (Date.now() / 1000 > payload.exp) return c.json({ error: "Challenge expiré" }, 401);
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
+    const acct = await getAdminAccount(payload.username);
     if (!acct?.totpSecret) return c.json({ error: "Compte sans 2FA" }, 400);
     if (!(await verifyTotp(acct.totpSecret, code))) return c.json({ error: "Code invalide" }, 401);
     const exp = Math.floor(Date.now() / 1000) + ADMIN_TOKEN_TTL_SEC;
