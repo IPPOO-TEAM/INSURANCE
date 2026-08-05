@@ -2825,11 +2825,33 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const username = (body.username ?? "").toString().trim();
     const password = (body.password ?? "").toString();
-    if (ADMIN_ACCOUNTS.length === 0) {
-      return c.json({ error: "Back office non configuré: définissez ADMIN_USERNAME et ADMIN_PASSWORD (ou ADMIN_ACCOUNTS)." }, 503);
+
+    // Unified account lookup (static environment accounts first, then dynamic admin roles from KV)
+    let acct: { username: string; role: "superadmin" | "operator" | "support"; totpSecret?: string } | null = null;
+    const staticAcct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    if (staticAcct) {
+      acct = staticAcct;
+    } else {
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const dynamicRole = roles.find((r) => r.username === username);
+      if (dynamicRole) {
+        const hash = await sha256Hex(password + ":" + username);
+        if (dynamicRole.pwHash === hash) {
+          acct = {
+            username: dynamicRole.username,
+            role: dynamicRole.role,
+            totpSecret: dynamicRole.totpSecret,
+          };
+        }
+      }
     }
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
-    if (!acct) return c.json({ error: "Identifiants invalides" }, 401);
+
+    if (!acct) {
+      if (ADMIN_ACCOUNTS.length === 0) {
+        return c.json({ error: "Back office non configuré: définissez ADMIN_USERNAME et ADMIN_PASSWORD (ou ADMIN_ACCOUNTS)." }, 503);
+      }
+      return c.json({ error: "Identifiants invalides" }, 401);
+    }
 
     if (acct.totpSecret) {
       const challengeExp = Math.floor(Date.now() / 1000) + 5 * 60;
@@ -2860,7 +2882,24 @@ app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
     const payload = await verifyToken<{ kind: string; username: string; role: string; exp: number }>(challenge);
     if (!payload || payload.kind !== "admin-2fa") return c.json({ error: "Challenge invalide" }, 401);
     if (Date.now() / 1000 > payload.exp) return c.json({ error: "Challenge expiré" }, 401);
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
+
+    // Dynamic accounts with 2FA support
+    const staticAcct = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
+    let acct: { username: string; role: "superadmin" | "operator" | "support"; totpSecret?: string } | null = null;
+    if (staticAcct) {
+      acct = staticAcct;
+    } else {
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const dynamicRole = roles.find((r) => r.username === payload.username);
+      if (dynamicRole) {
+        acct = {
+          username: dynamicRole.username,
+          role: dynamicRole.role,
+          totpSecret: dynamicRole.totpSecret,
+        };
+      }
+    }
+
     if (!acct?.totpSecret) return c.json({ error: "Compte sans 2FA" }, 400);
     if (!(await verifyTotp(acct.totpSecret, code))) return c.json({ error: "Code invalide" }, 401);
     const exp = Math.floor(Date.now() / 1000) + ADMIN_TOKEN_TTL_SEC;
