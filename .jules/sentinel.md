@@ -1,0 +1,4 @@
+## 2026-05-30 - [Bypass of Admin Dynamic Roles Login and 2FA Verification]
+**Vulnerability:** Dynamic admin accounts created via `/admin/roles` were stored in the `system:admin:roles` Key-Value key but completely ignored/unusable during `/admin/login` and `/admin/login/2fa` because only the static `ADMIN_ACCOUNTS` array from environment configuration was checked.
+**Learning:** Decoupled administrative roles management from core login paths can easily introduce functional security bypasses or lockouts if dynamic state storage is not explicitly integrated into authentication checks.
+**Prevention:** Unify static (configuration-based) and dynamic (database/store-based) credential verification within a single authentication pipeline, ensuring password hashing and 2FA secrets are validated identically across both types of credentials.
