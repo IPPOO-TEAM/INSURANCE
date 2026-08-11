@@ -517,12 +517,23 @@ async function sha256Hex(body: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// Centralized helper to prevent IP spoofing behind Cloudflare by prioritizing cf-connecting-ip.
+function getClientIP(c: any): string {
+  if (c && c.req && typeof c.req.header === "function") {
+    const cfIp = c.req.header("cf-connecting-ip");
+    if (cfIp) return cfIp.trim();
+    const forwarded = c.req.header("x-forwarded-for");
+    if (forwarded) return forwarded.split(",")[0].trim();
+  }
+  return "anon";
+}
+
 // D11 — Chaîne de hash inviolable. Chaque entrée intègre prevHash + hash(prevHash|canonical).
 // La pointe est conservée dans system:audit:chain-tip pour permettre la
 // vérification ultérieure via /admin/audit/verify-chain.
 async function adminAudit(c: any, admin: { username: string; role?: string }, action: string, meta: Record<string, any> = {}) {
   try {
-    const ip = c?.req?.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+    const ip = getClientIP(c);
     const ua = (c?.req?.header("user-agent") ?? "").slice(0, 200);
     const id = `aa_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const at = new Date().toISOString();
@@ -2818,8 +2829,9 @@ app.delete(`${PREFIX}/auth/webauthn/:credId`, async (c) => {
 // header. The Supabase users table is NEVER consulted for admin access.
 
 app.post(`${PREFIX}/admin/login`, async (c) => {
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-login:${ip}`, 5, 600);
+  const ip = getClientIP(c);
+  // Corrected rate limiting parameters to avoid rate limiting bypass (scope, id, max, windowSec)
+  const limited = await guardRate(c, "admin-login", ip, 5, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -2828,29 +2840,48 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
     if (ADMIN_ACCOUNTS.length === 0) {
       return c.json({ error: "Back office non configuré: définissez ADMIN_USERNAME et ADMIN_PASSWORD (ou ADMIN_ACCOUNTS)." }, 503);
     }
-    const acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
-    if (!acct) return c.json({ error: "Identifiants invalides" }, 401);
 
-    if (acct.totpSecret) {
+    let role: string | undefined;
+    let totpSecret: string | undefined;
+
+    // Check static environment credentials (ADMIN_ACCOUNTS) first
+    const acct = ADMIN_ACCOUNTS.find((a) => a.username === username && a.password === password);
+    if (acct) {
+      role = acct.role;
+      totpSecret = acct.totpSecret;
+    } else {
+      // Check dynamically created admin accounts from system:admin:roles KV store
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const dyn = roles.find((r) => r.username === username);
+      if (dyn && (await sha256Hex(password + ":" + username)) === dyn.pwHash) {
+        role = dyn.role;
+        totpSecret = dyn.totpSecret;
+      }
+    }
+
+    if (!role) return c.json({ error: "Identifiants invalides" }, 401);
+
+    if (totpSecret) {
       const challengeExp = Math.floor(Date.now() / 1000) + 5 * 60;
-      const challenge = await signToken({ kind: "admin-2fa", username: acct.username, role: acct.role, exp: challengeExp });
+      const challenge = await signToken({ kind: "admin-2fa", username, role, exp: challengeExp });
       return c.json({ requires2FA: true, challenge });
     }
 
     const exp = Math.floor(Date.now() / 1000) + ADMIN_TOKEN_TTL_SEC;
     const jti = crypto.randomUUID();
-    const token = await signToken({ kind: "admin", username: acct.username, role: acct.role, iat: Math.floor(Date.now() / 1000), exp, jti });
-    await persistAdminSession(c, jti, acct.username, acct.role, exp * 1000);
-    await adminAudit(c, { username: acct.username, role: acct.role }, "login", { jti });
-    return c.json({ token, username: acct.username, role: acct.role, expiresAt: exp * 1000 });
+    const token = await signToken({ kind: "admin", username, role, iat: Math.floor(Date.now() / 1000), exp, jti });
+    await persistAdminSession(c, jti, username, role, exp * 1000);
+    await adminAudit(c, { username, role }, "login", { jti });
+    return c.json({ token, username, role, expiresAt: exp * 1000 });
   } catch (err) {
     return c.json({ error: `${err}` }, 500);
   }
 });
 
 app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-2fa:${ip}`, 8, 600);
+  const ip = getClientIP(c);
+  // Corrected rate limiting parameters to avoid rate limiting bypass (scope, id, max, windowSec)
+  const limited = await guardRate(c, "admin-2fa", ip, 8, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -2860,16 +2891,27 @@ app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
     const payload = await verifyToken<{ kind: string; username: string; role: string; exp: number }>(challenge);
     if (!payload || payload.kind !== "admin-2fa") return c.json({ error: "Challenge invalide" }, 401);
     if (Date.now() / 1000 > payload.exp) return c.json({ error: "Challenge expiré" }, 401);
+
+    // Verify 2FA secret against both static and dynamic accounts
+    let totpSecret = "";
     const acct = ADMIN_ACCOUNTS.find((a) => a.username === payload.username);
-    if (!acct?.totpSecret) return c.json({ error: "Compte sans 2FA" }, 400);
-    if (!(await verifyTotp(acct.totpSecret, code))) return c.json({ error: "Code invalide" }, 401);
+    if (acct) {
+      totpSecret = acct.totpSecret ?? "";
+    } else {
+      const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+      const dyn = roles.find((r) => r.username === payload.username);
+      if (dyn) totpSecret = dyn.totpSecret ?? "";
+    }
+
+    if (!totpSecret) return c.json({ error: "Compte sans 2FA" }, 400);
+    if (!(await verifyTotp(totpSecret, code))) return c.json({ error: "Code invalide" }, 401);
     const exp = Math.floor(Date.now() / 1000) + ADMIN_TOKEN_TTL_SEC;
     const jti = crypto.randomUUID();
-    const token = await signToken({ kind: "admin", username: acct.username, role: acct.role, iat: Math.floor(Date.now() / 1000), exp, jti });
-    await persistAdminSession(c, jti, acct.username, acct.role, exp * 1000);
-    await audit(`admin:${acct.username}`, "admin.login.2fa", { role: acct.role });
-    await adminAudit(c, { username: acct.username, role: acct.role }, "login.2fa", { jti });
-    return c.json({ token, username: acct.username, role: acct.role, expiresAt: exp * 1000 });
+    const token = await signToken({ kind: "admin", username: payload.username, role: payload.role, iat: Math.floor(Date.now() / 1000), exp, jti });
+    await persistAdminSession(c, jti, payload.username, payload.role, exp * 1000);
+    await audit(`admin:${payload.username}`, "admin.login.2fa", { role: payload.role });
+    await adminAudit(c, { username: payload.username, role: payload.role }, "login.2fa", { jti });
+    return c.json({ token, username: payload.username, role: payload.role, expiresAt: exp * 1000 });
   } catch (err) {
     return c.json({ error: `${err}` }, 500);
   }
