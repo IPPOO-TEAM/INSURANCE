@@ -1,6 +1,7 @@
 import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
+import { secureHeaders } from "npm:hono/secure-headers";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import {
   generateRegistrationOptions,
@@ -17,6 +18,8 @@ import {
 } from "./validators.ts";
 
 const app = new Hono();
+// Sentinel Security: Apply standard HTTP security headers globally (X-Frame-Options, X-Content-Type-Options, HSTS, etc.)
+app.use("*", secureHeaders());
 app.use("*", logger(console.log));
 app.use(
   "/*",
