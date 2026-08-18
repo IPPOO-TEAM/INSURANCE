@@ -2202,7 +2202,10 @@ app.put(`${PREFIX}/settings`, async (c) => {
   const { user, error } = await requireUser(c);
   if (!user) return c.json({ error: `Non autorisé: ${error}` }, 401);
   try {
-    const updates = await c.req.json();
+    // SECURITY FIX: Validate request body against SettingsUpdateSchema to reject unvalidated/malicious payloads
+    const parsed = await parseBody(c, SettingsUpdateSchema);
+    if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
+    const updates = parsed.data;
     const current = (await kv.get(k.settings(user.id))) ?? {};
     const next = { ...current, ...updates };
     await kv.set(k.settings(user.id), next);
