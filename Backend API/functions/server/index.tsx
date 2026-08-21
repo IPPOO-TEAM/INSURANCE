@@ -1517,7 +1517,7 @@ app.post(`${PREFIX}/payments/webhook/cinetpay`, async (c) => {
     if (!secret) { await logWebhookEvent({ provider: "cinetpay", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const sig = c.req.header("x-token") ?? "";
     const expected = await hmacHex(secret, raw);
-    if (sig !== expected) { await logWebhookEvent({ provider: "cinetpay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
+    if (!safeCompare(sig, expected)) { await logWebhookEvent({ provider: "cinetpay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const paymentId = body?.cpm_custom ?? body?.metadata?.paymentId;
     const userId = body?.metadata?.userId;
@@ -1543,7 +1543,7 @@ app.post(`${PREFIX}/payments/webhook/fedapay`, async (c) => {
     if (!secret) { await logWebhookEvent({ provider: "fedapay", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const sig = c.req.header("x-fedapay-signature") ?? "";
     const expected = await hmacHex(secret, raw);
-    if (sig !== expected) { await logWebhookEvent({ provider: "fedapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
+    if (!safeCompare(sig, expected)) { await logWebhookEvent({ provider: "fedapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const entity = body?.entity ?? body;
     const paymentId = entity?.custom_metadata?.paymentId;
@@ -1569,7 +1569,7 @@ app.post(`${PREFIX}/payments/webhook/mtn`, async (c) => {
     const key = Deno.env.get("MTN_MOMO_CALLBACK_KEY");
     if (!key) { await logWebhookEvent({ provider: "mtn-momo", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const provided = c.req.header("x-callback-key") ?? "";
-    if (provided !== key) { await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Clé invalide" }, 401); }
+    if (!safeCompare(provided, key)) { await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Clé invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const paymentId = body?.externalId ?? body?.payerMessage;
     const userId = body?.payer?.partyId ? null : body?.metadata?.userId;
@@ -1586,6 +1586,20 @@ app.post(`${PREFIX}/payments/webhook/mtn`, async (c) => {
     return c.json({ error: "Erreur webhook" }, 500);
   }
 });
+
+/**
+ * Constant-time string comparison to prevent timing attacks when comparing sensitive secrets or HMAC signatures.
+ */
+function safeCompare(a: string, b: string): boolean {
+  const bufA = enc.encode(a);
+  const bufB = enc.encode(b);
+  let result = bufA.length ^ bufB.length;
+  const len = Math.max(bufA.length, bufB.length);
+  for (let i = 0; i < len; i++) {
+    result |= (bufA[i % bufA.length] ^ bufB[i % bufB.length]);
+  }
+  return result === 0;
+}
 
 // HMAC helper for webhook signatures.
 async function hmacHex(secret: string, message: string): Promise<string> {
