@@ -29,6 +29,12 @@ app.use(
   }),
 );
 
+// Global error handler: catches uncaught exceptions to prevent stack trace and internal detail leakage (OWASP Information Disclosure)
+app.onError((err, c) => {
+  console.error(`[Unhandled Error] ${c.req.method} ${c.req.path}:`, err);
+  return c.json({ error: "Erreur interne du serveur" }, 500);
+});
+
 const PREFIX = "/make-server-752d1a39";
 
 // F30 — Auto-scheduler "best effort" pour runRemindersCycle. Plutôt que
