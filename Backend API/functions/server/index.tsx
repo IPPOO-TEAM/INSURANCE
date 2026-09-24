@@ -562,11 +562,12 @@ async function audit(uid: string, action: string, meta: Record<string, any> = {}
 }
 
 // Returns true when allowed; false when over limit. Window is rolling N seconds.
-async function rateLimit(key: string, max: number, windowSec: number): Promise<boolean> {
+async function rateLimit(key: string, max: number, windowSec = 60): Promise<boolean> {
+  const win = windowSec ?? 60;
   const now = Date.now();
-  const existing = (await kv.get(k.rate(key))) ?? { count: 0, resetAt: now + windowSec * 1000 };
+  const existing = (await kv.get(k.rate(key))) ?? { count: 0, resetAt: now + win * 1000 };
   if (now > existing.resetAt) {
-    await kv.set(k.rate(key), { count: 1, resetAt: now + windowSec * 1000 });
+    await kv.set(k.rate(key), { count: 1, resetAt: now + win * 1000 });
     return true;
   }
   if (existing.count >= max) return false;
@@ -582,10 +583,10 @@ async function guardRate(
   scope: string,
   id: string,
   max: number,
-  windowSec: number,
+  windowSec = 60,
   message = "Trop de requêtes, réessayez plus tard.",
 ): Promise<Response | null> {
-  const allowed = await rateLimit(`${scope}:${id}`, max, windowSec);
+  const allowed = await rateLimit(`${scope}:${id}`, max, windowSec ?? 60);
   if (allowed) return null;
   return c.json({ error: message }, 429);
 }
@@ -2819,7 +2820,7 @@ app.delete(`${PREFIX}/auth/webauthn/:credId`, async (c) => {
 
 app.post(`${PREFIX}/admin/login`, async (c) => {
   const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-login:${ip}`, 5, 600);
+  const limited = await guardRate(c, "admin-login", ip, 5, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -2850,7 +2851,7 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
 
 app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
   const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-2fa:${ip}`, 8, 600);
+  const limited = await guardRate(c, "admin-2fa", ip, 8, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
