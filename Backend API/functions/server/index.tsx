@@ -592,7 +592,12 @@ async function guardRate(
 
 function makeReferralCode(name: string) {
   const base = (name || "IPPOO").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4).padEnd(4, "X");
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  // Security: Use CSPRNG crypto.getRandomValues instead of Math.random to ensure non-predictable referral codes
+  const buf = new Uint8Array(4);
+  crypto.getRandomValues(buf);
+  const charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let rand = "";
+  for (const b of buf) rand += charset[b % charset.length];
   return `${base}-${rand}`;
 }
 
