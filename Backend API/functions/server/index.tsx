@@ -14,6 +14,7 @@ import {
   SignupSchema, ProfileUpdateSchema, ClaimCreateSchema, PaymentLegacySchema,
   PaymentInitiateSchema, BeneficiaryCreateSchema, MessageCreateSchema, MessageEditSchema,
   SubscribeSchema, SettingsUpdateSchema, ChangePasswordSchema, RenewContractSchema,
+  NotifPrefsUpdateSchema,
 } from "./validators.ts";
 
 const app = new Hono();
@@ -2162,7 +2163,9 @@ app.patch(`${PREFIX}/me/notif-prefs`, async (c) => {
   const { user, error } = await requireUser(c);
   if (!user) return c.json({ error: `Non autorisé: ${error}` }, 401);
   try {
-    const body = await c.req.json();
+    const parsed = await parseBody(c, NotifPrefsUpdateSchema);
+    if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
+    const body = parsed.data;
     const current = (await kv.get(k.settings(user.id))) ?? {};
     const previous = mergeNotifPrefs(current.notifPrefs);
     const merged: NotifPrefs = mergeNotifPrefs({
