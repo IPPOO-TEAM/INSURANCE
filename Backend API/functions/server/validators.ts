@@ -147,6 +147,33 @@ export const RenewContractSchema = z.object({
   method: z.string().max(40).optional(),
 });
 
+export const NotifPrefsUpdateSchema = z
+  .object({
+    channels: z
+      .object({
+        in_app: z.boolean().optional(),
+        push: z.boolean().optional(),
+        email: z.boolean().optional(),
+        sms: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    types: z
+      .object({
+        upcoming: z.boolean().optional(),
+        pending: z.boolean().optional(),
+        failed: z.boolean().optional(),
+        renewal: z.boolean().optional(),
+        broadcast: z.boolean().optional(),
+        claim: z.boolean().optional(),
+        payment: z.boolean().optional(),
+        system: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 // Helper: parses a JSON body against a schema and returns either the parsed
 // value or a tuple [errorMessage, 400] that the route can return directly.
 export async function parseBody<S extends z.ZodTypeAny>(
