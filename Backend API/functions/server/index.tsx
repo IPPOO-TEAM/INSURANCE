@@ -4869,10 +4869,9 @@ app.post(`${PREFIX}/admin/messages/:uid`, async (c) => {
   if (!r.admin) return c.json({ error: r.error }, r.status);
   const uid = c.req.param("uid");
   try {
-    const body = await c.req.json();
-    const content = String(body?.content ?? "").trim();
-    if (!content) return c.json({ error: "Message vide" }, 400);
-    const replyToId = typeof body?.replyToId === "string" ? body.replyToId : undefined;
+    const parsed = await parseBody(c, MessageCreateSchema);
+    if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
+    const { content, replyToId } = parsed.data;
     const msg: any = {
       id: `m_${Date.now()}`,
       from: "conseiller",
@@ -4984,10 +4983,9 @@ app.post(`${PREFIX}/agent/messages/:uid`, async (c) => {
   if (!r.agent) return c.json({ error: r.error }, r.status);
   const uid = c.req.param("uid");
   try {
-    const body = await c.req.json();
-    const content = String(body?.content ?? "").trim();
-    if (!content) return c.json({ error: "Message vide" }, 400);
-    const replyToId = typeof body?.replyToId === "string" ? body.replyToId : undefined;
+    const parsed = await parseBody(c, MessageCreateSchema);
+    if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
+    const { content, replyToId } = parsed.data;
     const msg: any = {
       id: `m_${Date.now()}`,
       from: "conseiller",
