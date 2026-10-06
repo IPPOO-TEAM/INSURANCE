@@ -517,6 +517,23 @@ async function sha256Hex(body: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * Performs a constant-time string comparison to prevent timing side-channel attacks
+ * when validating webhook signatures, secrets, and API keys.
+ */
+function safeCompare(a: string, b: string): boolean {
+  const bufA = enc.encode(a);
+  const bufB = enc.encode(b);
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  let result = 0;
+  for (let i = 0; i < bufA.length; i++) {
+    result |= bufA[i] ^ bufB[i];
+  }
+  return result === 0;
+}
+
 // D11 — Chaîne de hash inviolable. Chaque entrée intègre prevHash + hash(prevHash|canonical).
 // La pointe est conservée dans system:audit:chain-tip pour permettre la
 // vérification ultérieure via /admin/audit/verify-chain.
@@ -1441,7 +1458,7 @@ app.post(`${PREFIX}/payments/webhook`, async (c) => {
   try {
     const secret = Deno.env.get("KKIAPAY_SECRET");
     const provided = c.req.header("X-Kkiapay-Secret") ?? c.req.header("x-kkiapay-secret") ?? "";
-    if (!secret || provided !== secret) {
+    if (!secret || !safeCompare(provided, secret)) {
       await logWebhookEvent({ provider: "kkiapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw });
       return c.json({ error: "Signature invalide" }, 401);
     }
@@ -1517,7 +1534,7 @@ app.post(`${PREFIX}/payments/webhook/cinetpay`, async (c) => {
     if (!secret) { await logWebhookEvent({ provider: "cinetpay", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const sig = c.req.header("x-token") ?? "";
     const expected = await hmacHex(secret, raw);
-    if (sig !== expected) { await logWebhookEvent({ provider: "cinetpay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
+    if (!safeCompare(sig, expected)) { await logWebhookEvent({ provider: "cinetpay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const paymentId = body?.cpm_custom ?? body?.metadata?.paymentId;
     const userId = body?.metadata?.userId;
@@ -1543,7 +1560,7 @@ app.post(`${PREFIX}/payments/webhook/fedapay`, async (c) => {
     if (!secret) { await logWebhookEvent({ provider: "fedapay", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const sig = c.req.header("x-fedapay-signature") ?? "";
     const expected = await hmacHex(secret, raw);
-    if (sig !== expected) { await logWebhookEvent({ provider: "fedapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
+    if (!safeCompare(sig, expected)) { await logWebhookEvent({ provider: "fedapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const entity = body?.entity ?? body;
     const paymentId = entity?.custom_metadata?.paymentId;
@@ -1569,7 +1586,7 @@ app.post(`${PREFIX}/payments/webhook/mtn`, async (c) => {
     const key = Deno.env.get("MTN_MOMO_CALLBACK_KEY");
     if (!key) { await logWebhookEvent({ provider: "mtn-momo", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const provided = c.req.header("x-callback-key") ?? "";
-    if (provided !== key) { await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Clé invalide" }, 401); }
+    if (!safeCompare(provided, key)) { await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Clé invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const paymentId = body?.externalId ?? body?.payerMessage;
     const userId = body?.payer?.partyId ? null : body?.metadata?.userId;
@@ -4415,7 +4432,7 @@ app.post(`${PREFIX}/admin/reminders/run`, async (c) => {
 app.post(`${PREFIX}/reminders/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !safeCompare(provided, secret)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const res = await runRemindersCycle("cron");
     return c.json({ ok: true, ...res });
@@ -4729,7 +4746,7 @@ app.post(`${PREFIX}/system/kv-backup/cron`, async (c) => {
 app.post(`${PREFIX}/billing/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !safeCompare(provided, secret)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const res = await runMonthlyBillingCycle("cron");
     return c.json({ ok: true, ...res });
