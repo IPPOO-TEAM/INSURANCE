@@ -160,6 +160,19 @@ function loadAdminAccounts(): AdminAccount[] {
 }
 const ADMIN_ACCOUNTS = loadAdminAccounts();
 
+// Constant-time string comparison to mitigate timing side-channel attacks.
+const textEncoder = new TextEncoder();
+function safeCompare(a: string, b: string): boolean {
+  const bufA = textEncoder.encode(a);
+  const bufB = textEncoder.encode(b);
+  if (bufA.length !== bufB.length) return false;
+  let result = 0;
+  for (let i = 0; i < bufA.length; i++) {
+    result |= bufA[i] ^ bufB[i];
+  }
+  return result === 0;
+}
+
 // RFC 6238 TOTP — HMAC-SHA1, 30s step, 6 digits.
 function base32Decode(s: string): Uint8Array {
   const alph = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -5091,7 +5104,8 @@ app.post(`${PREFIX}/agent/signup`, async (c) => {
     const name = String(body?.name ?? "").trim().slice(0, 80);
     const phone = String(body?.phone ?? "").trim().slice(0, 30);
 
-    if (code !== expected) return c.json({ error: "Code d'invitation invalide." }, 403);
+    // Security: Use constant-time comparison to prevent timing side-channel attacks on AGENT_SIGNUP_CODE validation
+    if (!safeCompare(code, expected)) return c.json({ error: "Code d'invitation invalide." }, 403);
     if (!email || !/^\S+@\S+\.\S+$/.test(email)) return c.json({ error: "Email invalide." }, 400);
     if (password.length < 8) return c.json({ error: "Mot de passe : 8 caractères minimum." }, 400);
     if (!name) return c.json({ error: "Nom requis." }, 400);
