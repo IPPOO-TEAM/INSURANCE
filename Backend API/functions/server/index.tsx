@@ -2287,8 +2287,9 @@ app.post(`${PREFIX}/contracts/:id/renew`, async (c) => {
   if (limited) return limited;
   const id = c.req.param("id");
   try {
-    const body = await c.req.json().catch(() => ({}));
-    const phone = typeof body.phone === "string" ? body.phone : null;
+    const parsed = await parseBody(c, RenewContractSchema);
+    if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
+    const phone = parsed.data.phone ?? null;
     const contracts = (await kv.get(k.contracts(user.id))) ?? [];
     const ct = contracts.find((c: any) => c.id === id);
     if (!ct) return c.json({ error: "Contrat introuvable" }, 404);

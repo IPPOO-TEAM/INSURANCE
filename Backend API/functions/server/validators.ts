@@ -145,6 +145,7 @@ export const ChangePasswordSchema = z.object({
 
 export const RenewContractSchema = z.object({
   method: z.string().max(40).optional(),
+  phone: z.string().max(40).optional(),
 });
 
 // Helper: parses a JSON body against a schema and returns either the parsed
