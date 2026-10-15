@@ -5237,6 +5237,8 @@ app.post(`${PREFIX}/agent/2fa/enroll`, async (c) => {
 app.post(`${PREFIX}/agent/2fa/activate`, async (c) => {
   const r = await requireAgent(c);
   if (!r.agent) return c.json({ error: r.error }, r.status);
+  const limited = await guardRate(c, "agent-2fa-act", r.agent.id, 5, 600);
+  if (limited) return limited;
   try {
     const { code } = await c.req.json().catch(() => ({ code: "" }));
     const totp = (await kv.get(k.agentTotp(r.agent.id))) as { secret?: string; status?: string } | null;
@@ -5257,6 +5259,8 @@ app.post(`${PREFIX}/agent/2fa/activate`, async (c) => {
 app.post(`${PREFIX}/agent/2fa/verify`, async (c) => {
   const r = await requireAgent(c);
   if (!r.agent) return c.json({ error: r.error }, r.status);
+  const limited = await guardRate(c, "agent-2fa-ver", r.agent.id, 5, 600);
+  if (limited) return limited;
   try {
     const { code } = await c.req.json().catch(() => ({ code: "" }));
     const totp = (await kv.get(k.agentTotp(r.agent.id))) as { secret?: string; status?: string } | null;
