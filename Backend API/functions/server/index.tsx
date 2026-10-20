@@ -402,6 +402,18 @@ async function sendSms(to: string, text: string): Promise<boolean> {
   } catch { return false; }
 }
 
+// Helper: Constant-time string comparison to prevent timing side-channel attacks on secret comparison
+function safeCompare(a: string, b: string): boolean {
+  const bufA = new TextEncoder().encode(a);
+  const bufB = new TextEncoder().encode(b);
+  if (bufA.byteLength !== bufB.byteLength) return false;
+  let c = 0;
+  for (let i = 0; i < bufA.byteLength; i++) {
+    c |= bufA[i] ^ bufB[i];
+  }
+  return c === 0;
+}
+
 // --- HMAC signing for QR tokens ---
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -1441,7 +1453,7 @@ app.post(`${PREFIX}/payments/webhook`, async (c) => {
   try {
     const secret = Deno.env.get("KKIAPAY_SECRET");
     const provided = c.req.header("X-Kkiapay-Secret") ?? c.req.header("x-kkiapay-secret") ?? "";
-    if (!secret || provided !== secret) {
+    if (!secret || !safeCompare(provided, secret)) {
       await logWebhookEvent({ provider: "kkiapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw });
       return c.json({ error: "Signature invalide" }, 401);
     }
@@ -1569,7 +1581,7 @@ app.post(`${PREFIX}/payments/webhook/mtn`, async (c) => {
     const key = Deno.env.get("MTN_MOMO_CALLBACK_KEY");
     if (!key) { await logWebhookEvent({ provider: "mtn-momo", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const provided = c.req.header("x-callback-key") ?? "";
-    if (provided !== key) { await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Clé invalide" }, 401); }
+    if (!safeCompare(provided, key)) { await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Clé invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const paymentId = body?.externalId ?? body?.payerMessage;
     const userId = body?.payer?.partyId ? null : body?.metadata?.userId;
@@ -4415,7 +4427,7 @@ app.post(`${PREFIX}/admin/reminders/run`, async (c) => {
 app.post(`${PREFIX}/reminders/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !safeCompare(provided, secret)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const res = await runRemindersCycle("cron");
     return c.json({ ok: true, ...res });
@@ -4432,7 +4444,7 @@ app.post(`${PREFIX}/reminders/cron`, async (c) => {
 app.post(`${PREFIX}/agent/tasks/remind/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !safeCompare(provided, secret)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const { data, error } = await admin
       .from("kv_store_752d1a39")
@@ -4483,7 +4495,7 @@ app.post(`${PREFIX}/agent/tasks/remind/cron`, async (c) => {
 app.post(`${PREFIX}/account/sweep-deletions/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !safeCompare(provided, secret)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const { data, error } = await admin
       .from("kv_store_752d1a39")
@@ -4689,7 +4701,7 @@ app.get(`${PREFIX}/admin/client-errors`, async (c) => {
 app.post(`${PREFIX}/system/kv-backup/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !safeCompare(provided, secret)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const day = new Date().toISOString().slice(0, 10);
     const path = `__backup__/kv-${day}.ndjson.gz`;
@@ -4729,7 +4741,7 @@ app.post(`${PREFIX}/system/kv-backup/cron`, async (c) => {
 app.post(`${PREFIX}/billing/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !safeCompare(provided, secret)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const res = await runMonthlyBillingCycle("cron");
     return c.json({ ok: true, ...res });
@@ -5091,7 +5103,7 @@ app.post(`${PREFIX}/agent/signup`, async (c) => {
     const name = String(body?.name ?? "").trim().slice(0, 80);
     const phone = String(body?.phone ?? "").trim().slice(0, 30);
 
-    if (code !== expected) return c.json({ error: "Code d'invitation invalide." }, 403);
+    if (!safeCompare(code, expected)) return c.json({ error: "Code d'invitation invalide." }, 403);
     if (!email || !/^\S+@\S+\.\S+$/.test(email)) return c.json({ error: "Email invalide." }, 400);
     if (password.length < 8) return c.json({ error: "Mot de passe : 8 caractères minimum." }, 400);
     if (!name) return c.json({ error: "Nom requis." }, 400);
