@@ -14,6 +14,7 @@ import {
   SignupSchema, ProfileUpdateSchema, ClaimCreateSchema, PaymentLegacySchema,
   PaymentInitiateSchema, BeneficiaryCreateSchema, MessageCreateSchema, MessageEditSchema,
   SubscribeSchema, SettingsUpdateSchema, ChangePasswordSchema, RenewContractSchema,
+  WebAuthnLoginVerifySchema,
 } from "./validators.ts";
 
 const app = new Hono();
@@ -2754,7 +2755,9 @@ app.post(`${PREFIX}/auth/webauthn/login/verify`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     const allowed = await rateLimit(`biolog:${ip}`, 10, 600);
     if (!allowed) return c.json({ error: "Trop de tentatives, patientez." }, 429);
-    const { email, response } = (await c.req.json()) ?? {};
+    const parsed = await parseBody(c, WebAuthnLoginVerifySchema);
+    if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
+    const { email, response } = parsed.data;
     const uid = await kv.get(k.emailToUid(email));
     if (!uid) return c.json({ error: "Compte introuvable" }, 404);
     const stored = await kv.get(k.webauthnChallenge(`auth:${uid}`));

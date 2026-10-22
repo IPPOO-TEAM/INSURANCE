@@ -147,6 +147,13 @@ export const RenewContractSchema = z.object({
   method: z.string().max(40).optional(),
 });
 
+export const WebAuthnLoginVerifySchema = z.object({
+  email: z.string().email("Email invalide"),
+  response: z.object({
+    id: z.string().min(1, "ID empreinte requis"),
+  }).passthrough(),
+});
+
 // Helper: parses a JSON body against a schema and returns either the parsed
 // value or a tuple [errorMessage, 400] that the route can return directly.
 export async function parseBody<S extends z.ZodTypeAny>(
