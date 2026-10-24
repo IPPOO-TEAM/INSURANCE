@@ -160,6 +160,19 @@ function loadAdminAccounts(): AdminAccount[] {
 }
 const ADMIN_ACCOUNTS = loadAdminAccounts();
 
+// Constant-time string comparison to prevent timing side-channel attacks on secrets/codes
+function safeCompare(a: string, b: string): boolean {
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(a);
+  const bufB = encoder.encode(b);
+  if (bufA.length !== bufB.length) return false;
+  let c = 0;
+  for (let i = 0; i < bufA.length; i++) {
+    c |= bufA[i] ^ bufB[i];
+  }
+  return c === 0;
+}
+
 // RFC 6238 TOTP — HMAC-SHA1, 30s step, 6 digits.
 function base32Decode(s: string): Uint8Array {
   const alph = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -189,7 +202,8 @@ async function totpCode(secret: string, t: number): Promise<string> {
 async function verifyTotp(secret: string, code: string): Promise<boolean> {
   const t = Math.floor(Date.now() / 1000);
   for (const drift of [-1, 0, 1]) {
-    if (await totpCode(secret, t + drift * 30) === code) return true;
+    const expected = await totpCode(secret, t + drift * 30);
+    if (safeCompare(expected, code)) return true;
   }
   return false;
 }
@@ -5091,7 +5105,7 @@ app.post(`${PREFIX}/agent/signup`, async (c) => {
     const name = String(body?.name ?? "").trim().slice(0, 80);
     const phone = String(body?.phone ?? "").trim().slice(0, 30);
 
-    if (code !== expected) return c.json({ error: "Code d'invitation invalide." }, 403);
+    if (!safeCompare(code, expected)) return c.json({ error: "Code d'invitation invalide." }, 403);
     if (!email || !/^\S+@\S+\.\S+$/.test(email)) return c.json({ error: "Email invalide." }, 400);
     if (password.length < 8) return c.json({ error: "Mot de passe : 8 caractères minimum." }, 400);
     if (!name) return c.json({ error: "Nom requis." }, 400);
