@@ -186,10 +186,23 @@ async function totpCode(secret: string, t: number): Promise<string> {
   const code = ((sig[offset] & 0x7f) << 24) | (sig[offset + 1] << 16) | (sig[offset + 2] << 8) | sig[offset + 3];
   return String(code % 1_000_000).padStart(6, "0");
 }
+// Constant-time string comparison to prevent timing side-channel attacks on secrets and codes
+function safeCompare(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const bufA = enc.encode(a);
+  const bufB = enc.encode(b);
+  if (bufA.length !== bufB.length) return false;
+  let result = 0;
+  for (let i = 0; i < bufA.length; i++) {
+    result |= bufA[i] ^ bufB[i];
+  }
+  return result === 0;
+}
+
 async function verifyTotp(secret: string, code: string): Promise<boolean> {
   const t = Math.floor(Date.now() / 1000);
   for (const drift of [-1, 0, 1]) {
-    if (await totpCode(secret, t + drift * 30) === code) return true;
+    if (safeCompare(await totpCode(secret, t + drift * 30), code)) return true;
   }
   return false;
 }
@@ -5091,7 +5104,7 @@ app.post(`${PREFIX}/agent/signup`, async (c) => {
     const name = String(body?.name ?? "").trim().slice(0, 80);
     const phone = String(body?.phone ?? "").trim().slice(0, 30);
 
-    if (code !== expected) return c.json({ error: "Code d'invitation invalide." }, 403);
+    if (!safeCompare(code, expected)) return c.json({ error: "Code d'invitation invalide." }, 403);
     if (!email || !/^\S+@\S+\.\S+$/.test(email)) return c.json({ error: "Email invalide." }, 400);
     if (password.length < 8) return c.json({ error: "Mot de passe : 8 caractères minimum." }, 400);
     if (!name) return c.json({ error: "Nom requis." }, 400);
