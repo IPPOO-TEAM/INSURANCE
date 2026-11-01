@@ -9117,7 +9117,9 @@ app.get(`${PREFIX}/admin/roles`, async (c) => {
   if ("response" in g) return g.response;
   try {
     const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
-    return c.json({ roles });
+    // Security: Do not expose pwHash in API responses to prevent credential hash leakage
+    const sanitized = roles.map(({ pwHash, ...rest }) => rest);
+    return c.json({ roles: sanitized });
   } catch (err) {
     return c.json({ error: `roles: ${err}` }, 500);
   }
