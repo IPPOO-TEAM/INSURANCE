@@ -1,0 +1,4 @@
+## 2026-06-12 - Rate-Limiting Bypass via Argument Misordering
+**Vulnerability:** A rate-limiting bypass was discovered in the admin login (`POST /admin/login`) and 2FA (`POST /admin/login/2fa`) endpoints. The `guardRate` utility was invoked with misordered arguments: `guardRate(c, "admin-login:" + ip, 5, 600)`, causing `id` to be 5, `max` to be 600, and `windowSec` to be `undefined`. Because `resetAt` evaluated to `NaN`, expiration checks failed and the rate limit was effectively rendered ineffective.
+**Learning:** `guardRate` expects `(c, scope, id, max, windowSec)`. Passing composite keys as the `scope` shifts the remaining arguments.
+**Prevention:** Always verify positional arguments when calling security guards or refactor multi-argument security utilities to use typed options/interfaces. Verify rate-limiting logic using simulation or automated tests.
