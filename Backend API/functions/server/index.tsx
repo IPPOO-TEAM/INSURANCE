@@ -2819,7 +2819,9 @@ app.delete(`${PREFIX}/auth/webauthn/:credId`, async (c) => {
 
 app.post(`${PREFIX}/admin/login`, async (c) => {
   const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-login:${ip}`, 5, 600);
+  // Security: Enforce rate limiting on admin login (max 5 attempts per 10 minutes per IP)
+  // to prevent credential brute-force attacks.
+  const limited = await guardRate(c, "admin-login", ip, 5, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -2850,7 +2852,9 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
 
 app.post(`${PREFIX}/admin/login/2fa`, async (c) => {
   const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
-  const limited = await guardRate(c, `admin-2fa:${ip}`, 8, 600);
+  // Security: Enforce rate limiting on admin 2FA verification (max 8 attempts per 10 minutes per IP)
+  // to mitigate TOTP code brute-force attacks.
+  const limited = await guardRate(c, "admin-2fa", ip, 8, 600);
   if (limited) return limited;
   try {
     const body = await c.req.json().catch(() => ({}));
