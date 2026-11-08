@@ -9116,7 +9116,10 @@ app.get(`${PREFIX}/admin/roles`, async (c) => {
   const g = await requireAdmin(c, "superadmin");
   if ("response" in g) return g.response;
   try {
-    const roles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+    const rawRoles = ((await kv.get(k.adminRoles())) ?? []) as any[];
+    // Security: Sanitize output and strip sensitive password hashes (`pwHash`)
+    // before sending to the client to prevent credential disclosure.
+    const roles = rawRoles.map(({ pwHash, ...safeRole }) => safeRole);
     return c.json({ roles });
   } catch (err) {
     return c.json({ error: `roles: ${err}` }, 500);
