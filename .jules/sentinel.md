@@ -1,0 +1,4 @@
+## 2026-07-11 - Rate Limiting Parameter Mismatch on Admin Auth Endpoints
+**Vulnerability:** The `/admin/login` and `/admin/login/2fa` endpoints called `guardRate` with incorrect parameters: `guardRate(c, "admin-login:" + ip, 5, 600)`, where `guardRate` expects `(c, scope, id, max, windowSec)`. This caused `windowSec` to evaluate to `undefined`, which resulted in `NaN` rolling window calculation, bypassing the configured 5/8 attempts limit up to 600 attempts and effectively removing the 10-minute rate limiting window.
+**Learning:** Argument ordering mismatches in dynamically typed helper functions like `guardRate` can fail silently without type checking, leading to rate limit bypasses and credential brute-force vulnerabilities.
+**Prevention:** Verify positional argument alignment across all calls to rate limiting guards, and consider using typed parameter objects to prevent positional parameter misalignment.
